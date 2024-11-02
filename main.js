@@ -455,7 +455,11 @@ const simulator_el = (() => {
 						let overall_freq = 0;
 						for(const quality in freqs[fish_id]) { overall_freq += freqs[fish_id][quality]; }
 						return elhelper.create('tr', {
-							children: [wf_data.item_data[fish_id].file.item_name, fmt_pertime_hr(overall_freq / total_elapsed), ...[0,1,2,3,4,5].map(quality => fmt_pertime_hr((fish_freqs[quality] ?? 0) / total_elapsed))].map(t => elhelper.create('td', { textContent: t })),
+							children: [wf_data.item_data[fish_id].file.item_name, fmt_pertime_hr(overall_freq / total_elapsed), ...[0,1,2,3,4,5].map(quality => {
+								const f = fish_freqs[quality] ?? 0;
+								if(f == 0) { return ''; }
+								return fmt_pertime_hr(f / total_elapsed);
+							})].map(t => elhelper.create('td', { textContent: t })),
 						});
 					}),
 				}),
