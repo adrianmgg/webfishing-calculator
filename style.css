@@ -3,11 +3,23 @@
 	--wf-color-dark: #d4ab73;
 	--wf-color-green: #5a755a;
     --wf-color-darker: #6a4420;
-	
+	--wf-color-red: #ac0029;
+
 	--wf-color-dirtbrown: #481e0f;
 }
 
+@font-face {
+	font-family: accid;
+	src: url("assets/accid___.ttf");
+}
+@font-face {
+	font-family: "coolvetica condensed rg";
+	src: url("assets/coolvetica\ condensed\ rg.otf");
+}
+
 body {
+	font-family: "coolvetica condensed rg";
+	font-size: 18px;
 	background-color: var(--wf-color-dirtbrown);
 }
 
@@ -73,7 +85,7 @@ table > tbody > tr > td:last-child {
 fieldset {
     border: none;
     background-color: var(--wf-color-light);
-    margin: 0;
+    margin: 4px;
     border-radius: 16px;
     padding: 8px;
     color: var(--wf-color-darker);

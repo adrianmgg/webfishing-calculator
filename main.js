@@ -412,7 +412,7 @@ const simulator_el = (() => {
 	const f_maxbait = mk_form_dropdown(...[5, 10, 15, 20, 25, 30].map((n,idx) => [n,idx]));
 	const f_fishtype = mk_form_dropdown('ocean', 'lake');
 	const f_raining = elhelper.create('input', { type: 'checkbox', checked: false });
-	const f_simsteps = elhelper.create('input', { type: 'number', min: 1, valueAsNumber: 8192 });
+	const f_simsteps = elhelper.create('input', { type: 'number', min: 1, valueAsNumber: 10_000 });
 	const f_drink = mk_form_dropdown(['None', ''], ["Catcher's Cola", 'catch'], ["Catcher's Cola ULTRA", 'catch_big'], ["Catcher's Cola DELUXE", 'catch_deluxe']);
 	let sim_args = {};
 	function update_sim_args() {
@@ -472,6 +472,7 @@ const simulator_el = (() => {
 		}
 		// generate report
 		const report_lines = [];
+		const warning_lines = [];
 		let gold_per_bait = wf_data.PlayerData.BAIT_DATA[sim_args.casted_bait].cost / player_max_bait;
 		let fish_per_second = steps / total_elapsed;
 		let total_goldspent_bait = total_bait * gold_per_bait;
@@ -492,13 +493,14 @@ const simulator_el = (() => {
 		if(total_income_bonus     != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} bonus`); }
 		if(total_goldspent_bait   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_bait / total_elapsed)} buying bait`); }
 		if(total_goldspent_soda   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_soda / total_elapsed)} buying soda`); }
-		if(sim_args.lure_selected === 'challenge_lure') { report_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
-		report_lines.push('WARNING: elapsed times are currently a slight under-estimate');
-		if(sim_args.rod_speed_level !== 0) { report_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
-		if(sim_args.soda !== null) { report_lines.push('WARNING: soda benefits not yet considered in simulation'); }
+		if(sim_args.lure_selected === 'challenge_lure') { warning_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
+		warning_lines.push('WARNING: elapsed times are currently a slight under-estimate');
+		if(sim_args.rod_speed_level !== 0) { warning_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
+		if(sim_args.soda !== null) { warning_lines.push('WARNING: soda benefits not yet considered in simulation'); }
 		// clear old report
 		report_container.replaceChildren();
 		elhelper.create('pre', { parent: report_container, textContent: report_lines.join('\n') });
+		elhelper.create('pre', { parent: report_container, textContent: warning_lines.join('\n'), style: { color: 'var(--wf-color-red)' } });
 		elhelper.create('table', {
 			parent: report_container,
 			children: [
@@ -560,6 +562,8 @@ const simulator_el = (() => {
 			},
 		},
 	});
+	update_sim_args();
+	task_mgr.run(do_simulation());
 	return container;
 })();
 // =============================================================================
