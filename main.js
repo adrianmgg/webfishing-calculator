@@ -128,6 +128,7 @@ wf.simulate_fishing = function({
 	rod_power_level = 0,
 	rod_speed_level = 0,
 	rod_chance_level = 0,
+	soda = null, // catch | catch_big | catch_deluxe | null
 } = {}) {
 	let failed_casts = 0.0;  // fishing logic variable
 	let elapsed = 0.0;  // our tracking for seconds elapsed
@@ -332,8 +333,8 @@ function mk_spoiler_collapse(title, el) {
 		],
 	});
 }
-function mk_section(title, el) {
-	return elhelper.setup(mk_spoiler_collapse(title, el), { classList: ['wf-uielem'] });
+function mk_section(title, el, open=false) {
+	return elhelper.setup(mk_spoiler_collapse(title, el), { classList: ['wf-uielem'], open });
 }
 function mk_form_dropdown(...choices) {
 	return elhelper.create('select', {
@@ -345,6 +346,14 @@ function mk_form_dropdown(...choices) {
 }
 function mk_labeled(label, el) {
 	return elhelper.create('label', { textContent: label, children: [el], });
+}
+function mk_form_fieldset(label, children) {
+    return elhelper.create('fieldset', {
+        children: [
+            elhelper.create('legend', { textContent: label }),
+            ...children,
+        ],
+    });
 }
 
 // =============================================================================
@@ -364,6 +373,7 @@ const simulator_el = (() => {
 	const f_fishtype = mk_form_dropdown('ocean', 'lake');
 	const f_raining = elhelper.create('input', { type: 'checkbox', checked: false });
 	const f_simsteps = elhelper.create('input', { type: 'number', min: 1, valueAsNumber: 8192 });
+	const f_drink = mk_form_dropdown(['None', ''], ["Catcher's Cola", 'catch'], ["Catcher's Cola ULTRA", 'catch_big'], ["Catcher's Cola DELUXE", 'catch_deluxe']);
 	let sim_args = {};
 	function update_sim_args() {
 		sim_args = {
@@ -375,6 +385,7 @@ const simulator_el = (() => {
 			fish_type: f_fishtype.value,
 			in_rain: f_raining.checked,
 			lure_selected: f_lure.value,
+			soda: f_drink.value === '' ? null : f_drink.value,
 		};
 	}
 	function do_simulation() {
@@ -410,7 +421,13 @@ const simulator_el = (() => {
 		let gold_per_bait = wf_data.PlayerData.BAIT_DATA[sim_args.casted_bait].cost / player_max_bait;
 		let fish_per_second = steps / total_elapsed;
 		let total_goldspent_bait = total_bait * gold_per_bait;
-		let total_goldspent = total_goldspent_bait;
+		let total_goldspent_soda = 0;
+		if(sim_args.soda !== null) {
+			let sodas_drunk = total_elapsed * (1 / (5 * 60 * 60));
+			let price_per_soda = {catch: 25, catch_big: 150, catch_deluxe: 150}[sim_args.soda];
+			total_goldspent_soda = sodas_drunk * price_per_soda;
+		}
+		let total_goldspent = total_goldspent_bait + total_goldspent_soda;
 		let total_income = total_income_fishsale + total_income_moneybags + total_income_bonus;
 		function fmt_pertime_hr(per_second) { return `${(per_second*60*60).toFixed(2)}/hr`; };
 		function fmt_pertime_min(per_second) { return `${(per_second * 60).toFixed(2)}/min (${fmt_pertime_hr(per_second)})`; }
@@ -419,10 +436,12 @@ const simulator_el = (() => {
 		if(total_income_fishsale  != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_fishsale / total_elapsed)} selling catches`); }
 		if(total_income_moneybags != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_moneybags / total_elapsed)} from luck coin bags`); }
 		if(total_income_bonus     != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} bonus`); }
-		if(total_goldspent        != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent / total_elapsed)} buying bait`); }
+		if(total_goldspent_bait   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_bait / total_elapsed)} buying bait`); }
+		if(total_goldspent_soda   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_soda / total_elapsed)} buying soda`); }
 		if(sim_args.lure_selected === 'challenge_lure') { report_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
 		report_lines.push('WARNING: elapsed times are currently a slight under-estimate');
 		if(sim_args.rod_speed_level !== 0) { report_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
+		if(sim_args.soda !== null) { report_lines.push('WARNING: soda benefits not yet considered in simulation'); }
 		elhelper.create('pre', { parent: report_container, textContent: report_lines.join('\n') });
 		elhelper.create('table', {
 			parent: report_container,
@@ -445,17 +464,28 @@ const simulator_el = (() => {
 	}
 	elhelper.setup(form, {
 		children: [
-			mk_labeled('Bait', f_bait),
-			mk_labeled('Lure', f_lure),
-			mk_labeled('Rod Power', f_rodpower),
-			mk_labeled('Rod Reel Speed', f_rodspeed),
-			mk_labeled('Rod Catch Chance', f_rodchance),
-			mk_labeled('Rod Luck', f_rodluck),
-			mk_labeled('Max Bait', f_maxbait),
-			mk_labeled('Zone Type', f_fishtype),
-			mk_labeled('Raining?', f_raining),
-			mk_labeled('Simulation Steps', f_simsteps),
-			elhelper.create('input', { type: 'submit', value: 'Simulate' }),
+            mk_form_fieldset('Tackle', [
+                mk_labeled('Bait', f_bait),
+                mk_labeled('Lure', f_lure),
+            ]),
+            mk_form_fieldset('Upgrades', [
+                mk_labeled('Rod Power', f_rodpower),
+                mk_labeled('Rod Reel Speed', f_rodspeed),
+                mk_labeled('Rod Catch Chance', f_rodchance),
+                mk_labeled('Rod Luck', f_rodluck),
+                mk_labeled('Max Bait', f_maxbait),
+            ]),
+            mk_form_fieldset('Environment', [
+                mk_labeled('Zone Type', f_fishtype),
+                mk_labeled('Raining?', f_raining),
+            ]),
+			mk_form_fieldset('Misc.', [
+				mk_labeled('Drink', f_drink),
+			]),
+            mk_form_fieldset('Simulation', [
+                mk_labeled('Simulation Steps', f_simsteps),
+                elhelper.create('input', { type: 'submit', value: 'Simulate' }),
+            ]),
 		],
 		events: {
 			change: (ev) => { update_sim_args(); do_simulation(); },
@@ -474,9 +504,9 @@ elhelper.create('div', {
 	parent: document.body,
 	classList: ['detail-container'],
 	children: [
+		mk_section('fishing calculator', simulator_el, true),
 		mk_section('items', mktable(Object.entries(wf_data.item_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'item_name', 'category', 'tier', 'rare', 'catch_difficulty', 'catch_speed', 'loot_table', 'average_size', 'sell_value', 'sell_multiplier'])),
 		mk_section('cosmetics', mktable(Object.entries(wf_data.cosmetic_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'name', 'in_rotation', 'chest_reward', 'cost', 'title'])),
-		mk_section('fishing calculator', simulator_el),
 	],
 });
 

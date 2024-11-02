@@ -2,6 +2,7 @@
 	--wf-color-light: #feeed5;
 	--wf-color-dark: #d4ab73;
 	--wf-color-green: #5a755a;
+    --wf-color-darker: #6a4420;
 	
 	--wf-color-dirtbrown: #481e0f;
 }
@@ -52,6 +53,9 @@ table > tbody > tr > td {
 	background-color: var(--row-color);
 	padding-top: var(--row-padding);
 	padding-bottom: var(--row-padding);
+    /* some spacing so the text isn't riiight up against the neighboring cells */
+    padding-left: 0.5em;
+    padding-right: 0.5em;
 }
 table > tbody > tr > td:first-child {
 	border-top-left-radius: var(--row-radius);
@@ -63,3 +67,27 @@ table > tbody > tr > td:last-child {
 	border-bottom-right-radius: var(--row-radius);
 	padding-right: var(--row-padding);
 }
+
+
+
+fieldset {
+    border: none;
+    background-color: var(--wf-color-light);
+    margin: 0;
+    border-radius: 16px;
+    padding: 8px;
+    color: var(--wf-color-darker);
+    display: inline-flex;
+    flex-direction: column;
+}
+fieldset > legend {
+    float: left;
+}
+/* select {
+    border-style: none;
+    border-radius: 8px;
+    background-color: var(--wf-color-green);
+    color: var(--wf-color-light);
+} */
+
+
