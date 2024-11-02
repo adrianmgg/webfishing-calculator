@@ -355,14 +355,54 @@ function mk_form_fieldset(label, children) {
         ],
     });
 }
+function async_sleep(ms) {
+	return new Promise((resolve) => { setTimeout(() => resolve(), ms); });
+}
+const now_ms = performance?.now !== undefined ? () => performance.now() : () => Date.now();
+
+class SingleChunkedTaskRunnner {
+    constructor(max_blocking_duration) {
+		this.max_blocking_duration = max_blocking_duration;
+        this._cur_task = null;
+        this._running = false;
+    }
+
+    run(task) {
+        this._cur_task = task;
+        if(!this._running) {
+			this._running = true;
+            this._run_chunk();
+        }
+    }
+
+    _run_chunk() {
+		const begin = now_ms();
+		while(this._step()) {
+			const now = now_ms();
+			const elapsed = now - begin;
+			if(elapsed >= this.max_blocking_duration) {
+				this._blocking_begin = now_ms();
+				setTimeout(() => { this._run_chunk(); }, 0);
+				return;
+			}
+		}
+		this._running = false;
+    }
+
+	_step() {
+		return !this._cur_task.next().done;
+	}
+}
 
 // =============================================================================
 // = simulator ui
 // =============================================================================
 const simulator_el = (() => {
-	const container = elhelper.create('div');
+	const container = elhelper.create('div', { id: 'simulator' });
 	const form = elhelper.create('form', { parent: container });
+	const progress_bar = elhelper.create('progress', { parent: container, id: 'simulator-progress', max: 100, value: 0 });
 	const report_container = elhelper.create('div', { parent: container });
+
 	const f_bait = mk_form_dropdown('worms', 'cricket', 'leech', 'minnow', 'squid', 'nautilus');
 	const f_lure = mk_form_dropdown(...Object.entries(wf_data.PlayerData.LURE_DATA).map( ([id, {name}]) => [name, id] ));
 	const f_rodpower = mk_form_dropdown(...[1, 3, 10, 20, 35, 50].map((n,idx) => [n,idx]));
@@ -388,9 +428,10 @@ const simulator_el = (() => {
 			soda: f_drink.value === '' ? null : f_drink.value,
 		};
 	}
-	function do_simulation() {
-		// clear old report
-		report_container.replaceChildren();
+	const task_mgr = new SingleChunkedTaskRunnner(25);
+	function* do_simulation() {
+		yield;
+		container.classList.add('loading');
 		// run simulation, capture stats
 		const player_max_bait = [5, 10, 15, 20, 25, 30][f_maxbait.value];
 		const steps = f_simsteps.valueAsNumber;
@@ -400,7 +441,20 @@ const simulator_el = (() => {
 		let total_income_fishsale = 0;
 		let total_income_moneybags = 0;
 		let total_income_bonus = 0;
-		for(let step = 0; step < steps; step++) {
+
+		let unfreeze_blockingstart = now_ms();
+		// `step`s are number of successful samples (of `steps` total samples), `unfreeze_iterations` is number of goes thru the loop (success or not)
+		for(let step = 0, unfreeze_iterations = 0; step < steps; step++, unfreeze_iterations++) {
+			if(unfreeze_iterations % 1000 === 0) {
+				const now = now_ms();
+				const delta = now - unfreeze_blockingstart;
+				if(delta > (1_000 / 30)) {
+					progress_bar.value = step / steps * 100;
+					// await async_sleep(0);
+					yield;
+					unfreeze_blockingstart = now_ms();
+				}
+			}
 			// {"elapsed":9.454701500825825,"bait_used":1,"inv_items_added":[{"id":"fish_ocean_sunfish","size":231.92000000000002,"quality":0,"tags":[]}],"gold_added":0}
 			const sim = wf.simulate_fishing(sim_args);
 			if(sim === null) { step--; continue; }
@@ -442,6 +496,8 @@ const simulator_el = (() => {
 		report_lines.push('WARNING: elapsed times are currently a slight under-estimate');
 		if(sim_args.rod_speed_level !== 0) { report_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
 		if(sim_args.soda !== null) { report_lines.push('WARNING: soda benefits not yet considered in simulation'); }
+		// clear old report
+		report_container.replaceChildren();
 		elhelper.create('pre', { parent: report_container, textContent: report_lines.join('\n') });
 		elhelper.create('table', {
 			parent: report_container,
@@ -465,6 +521,7 @@ const simulator_el = (() => {
 				}),
 			],
 		});
+		container.classList.remove('loading');
 	}
 	elhelper.setup(form, {
 		children: [
@@ -492,11 +549,14 @@ const simulator_el = (() => {
             ]),
 		],
 		events: {
-			change: (ev) => { update_sim_args(); do_simulation(); },
+			change: (ev) => {
+				update_sim_args();
+				task_mgr.run(do_simulation());
+			},
 			submit: (ev) => {
 				update_sim_args();
 				ev.preventDefault();
-				do_simulation();
+				task_mgr.run(do_simulation());
 			},
 		},
 	});

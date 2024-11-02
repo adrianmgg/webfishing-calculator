@@ -91,3 +91,8 @@ fieldset > legend {
 } */
 
 
+#simulator:not(.loading) #simulator-progress {
+	display: none;
+}
+
+
