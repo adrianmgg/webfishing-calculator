@@ -1,3 +1,6 @@
+// @ts-check
+"use strict";
+
 // =============================================================================
 // = attribution
 // =   elhelper: is MIT licensed, (c) 2022 amgg
@@ -36,6 +39,21 @@ const elhelper = (function() { /* via https://github.com/adrianmgg/elhelper, MIT
 // =============================================================================
 // = reimplemented chunks of webfishing
 // =============================================================================
+/** @typedef {import("./webfishing_data_dump.json")} WFDataDump */
+/** @typedef {keyof WFDataDump['BAIT_DATA']} BaitType */
+/** @typedef {keyof WFDataDump['loot_tables']} LootTableId */
+/** @typedef {keyof WFDataDump['PlayerData']['LURE_DATA']} LureId */
+/** @typedef {keyof WFDataDump['item_data']} ItemId */
+/** @typedef {{[K in keyof WFDataDump['item_data'][ItemId]['file']]: WFDataDump['item_data'][ItemId]['file'][K]}} ItemInfo */
+
+/**
+ * @typedef {object} ItemInstance
+ * @property {string} id
+ * @property {number} size
+ * @property {number} quality
+ */
+
+/** @type {WFDataDump} */
 const wf_data = await fetch('webfishing_data_dump.json').then(r => r.json());
 const godot = {}; // godot api function reimpls
 godot.rand_range = function(min, max) { return Math.random() * (max - min) + min; };
@@ -59,8 +77,14 @@ godot.stepify = function(s, step) {
 	return s;
 };
 const wf = {};
+/**
+ * 
+ * @param {LootTableId} table 
+ * @param {number} max_tier 
+ * @returns {ItemId | null}
+ */
 wf._roll_loot_table = function(table, max_tier=-1) {
-	if(!(table in wf_data.loot_tables)) return;
+	if(!(table in wf_data.loot_tables)) return null;
 	// (rng reseeded here)
 	for(let i = 0; i < 20; i++) {
 		const roll = godot.rand_range(0.0, wf_data.loot_tables[table]["total"]);
@@ -117,6 +141,33 @@ wf._get_item_worth = function(item, type = "money") {
 	if(type == "credits" && item["fresh"] == false) { worth = 0; }
 	return worth;
 };
+/**
+ * @typedef {object} SimulatorParams
+ * @property {BaitType} casted_bait
+ * @property {number} zone_chance_boost
+ * @property {number} junk_mult
+ * @property {LootTableId} fish_type
+ * @property {boolean} in_rain
+ * @property {LureId} lure_selected
+ * @property {0|1|2|3|4|5} rod_luck_level
+ * @property {0|1|2|3|4|5} rod_power_level
+ * @property {0|1|2|3|4|5} rod_speed_level
+ * @property {0|1|2|3|4|5} rod_chance_level
+ * @property {null|'catch'|'catch_big'|'catch_deluxe'} soda
+ */
+/**
+ * @typedef {object} SimulatorResult
+ * @property {number} elapsed how long (in seconds) this catch took
+ * @property {number} bait_used number of bait consumed
+ * @property {ItemInstance[]} inv_items_added
+ * @property {number} gold_added_total total gold gained from this catch
+ * @property {{catchers_luck: number, catchers_luck_ultra: number, lucky_lure: number}} gold_added_breakdown
+ * @property {number} xp_gained
+ */
+/**
+ * @param {SimulatorParams} params
+ * @returns {SimulatorResult | null}
+ */
 wf.simulate_fishing = function({
 	casted_bait,
 	zone_chance_boost = 0.0,
@@ -129,13 +180,53 @@ wf.simulate_fishing = function({
 	rod_speed_level = 0,
 	rod_chance_level = 0,
 	soda = null, // catch | catch_big | catch_deluxe | null
-} = {}) {
+}) {
 	let failed_casts = 0.0;  // fishing logic variable
 	let elapsed = 0.0;  // our tracking for seconds elapsed
 	let bait_used = 0;  // our tracking for # bait consumed
 	let inv_items_added = []; // our tracking for items that will be added to inventory. analagous to PlayerData._add_item() calls
-	let gold_added = 0; // our tracking for amount bonus money gained (from lucky lure / catcher's luck)
-	
+	let gold_added_total = 0; // our tracking for amount bonus money gained (from lucky lure / catcher's luck)
+	let gold_added_breakdown = { catchers_luck: 0, catchers_luck_ultra: 0, lucky_lure: 0 };
+	let xp_gained = 0;
+
+	// catch drink defaults, via _process_timers
+	let catch_drink_boost = 1.0;
+	let catch_drink_reel = 1.0;
+	let catch_drink_xp = 1.0;
+	let catch_drink_gold_add = [0, 0];
+	let catch_drink_gold_percent = 0.0;
+
+	// effects of drinking each soda, via _consume_item
+	switch (soda) {
+		case "catch":
+			// catch_drink_timer = 18000;
+			catch_drink_boost = 1.15;
+			catch_drink_reel = 1.25;
+			catch_drink_xp = 1.0;
+			// catch_drink_tier = 1;
+			catch_drink_gold_add = [1, 10];
+			catch_drink_gold_percent = 0.0;
+			break;
+		case "catch_big":
+			// catch_drink_timer = 18000;
+			catch_drink_boost = 1.3;
+			catch_drink_reel = 1.45;
+			catch_drink_xp = 1.0;
+			// catch_drink_tier = 2;
+			catch_drink_gold_add = [10, 50];
+			catch_drink_gold_percent = 0.25;
+			break;
+		case "catch_deluxe":
+			// catch_drink_timer = 18000;
+			catch_drink_boost = 1.3;
+			catch_drink_reel = 1.45;
+			catch_drink_xp = 1.25;
+			// catch_drink_tier = 3;
+			catch_drink_gold_add = [0, 0];
+			catch_drink_gold_percent = 0.0;
+			break;
+	}
+
 	// =============================
 	// ==== _cast_fishing_rod() ====
 	// =============================
@@ -175,7 +266,7 @@ wf.simulate_fishing = function({
 		// TODO: if(recent_reel > 0) {fish_chance *= 1.1; }
 		if(rod_cast_data == "attractive") { fish_chance *= 1.3; }
 		if(in_rain) { fish_chance *= 1.1; }
-		// TODO: fish_chance *= catch_drink_boost;
+		fish_chance *= catch_drink_boost;
 		// ... out of bait warning message handling, not needed here ...
 		if(godot.randf() > fish_chance) {
 			failed_casts += 0.05;
@@ -276,8 +367,7 @@ wf.simulate_fishing = function({
 	let xp_mult = size / data.average_size;
 	if (xp_mult < 0.15) {xp_mult = 1.25 + xp_mult;}
 	xp_mult = Math.max(0.5, xp_mult);
-	// TODO catch_drink_xp
-	let xp_add = Math.ceil(data.obtain_xp * xp_mult * /*catch_drink_xp*/1.0 * quality_data.worth);
+	let xp_add = Math.ceil(data.obtain_xp * xp_mult * catch_drink_xp * quality_data.worth);
 	
 	// ... fishing struggle minigame happens here ...
 	// TODO need to factor in the catch struggle duration into total duration here
@@ -294,17 +384,31 @@ wf.simulate_fishing = function({
 	let ref__catch;
 	for(let i = 0; i < catches; i++) {
 		inv_items_added.push(ref__catch = {id: fish_roll, size: size, quality: quality, tags: tags});
-		// TODO: `xp_buildup += xp_add`
+		xp_gained += xp_add;
 	}
-	
+
 	if(rod_cast_data == "lucky") {
-		let worth = wf._get_item_worth(ref__catch);
-		let gold = Math.max(1, Math.ceil(worth * godot.rand_range(0.01, 0.1)));
-		gold_added += gold;
+		const worth = wf._get_item_worth(ref__catch);
+		const gold = Math.max(1, Math.ceil(worth * godot.rand_range(0.01, 0.1)));
+		// PlayerData._send_notification("Your Lucky Lure got you $" + str(gold) + "!")
+		gold_added_total += gold;
+		gold_added_breakdown.lucky_lure += gold;
 	}
-	// TODO ... simulate catcher's luck ...
-	
-	return { elapsed, bait_used, inv_items_added, gold_added };
+	if(catch_drink_gold_add != [0, 0]) {
+		const gold = Math.max(1, Math.ceil(godot.rand_range(catch_drink_gold_add[0], catch_drink_gold_add[1])));
+		// PlayerData._send_notification("Your Catcher's Luck got you $" + str(gold) + "!")
+		gold_added_total += gold;
+		gold_added_breakdown.catchers_luck += gold;
+	}
+	if(catch_drink_gold_percent > 0.0) {
+		const worth = wf._get_item_worth(ref__catch);
+		const gold = Math.max(1, Math.ceil(godot.rand_range(worth * 0.01, worth * catch_drink_gold_percent)));
+		// PlayerData._send_notification("Your Catcher's Luck Ultra got you $" + str(gold) + "!")
+		gold_added_total += gold;
+		gold_added_breakdown.catchers_luck_ultra += gold;
+	}
+
+	return { elapsed, bait_used, inv_items_added, gold_added_total, gold_added_breakdown, xp_gained };
 };
 // =============================================================================
 
@@ -414,7 +518,8 @@ const simulator_el = (() => {
 	const f_raining = elhelper.create('input', { type: 'checkbox', checked: false });
 	const f_simsteps = elhelper.create('input', { type: 'number', min: 1, valueAsNumber: 10_000 });
 	const f_drink = mk_form_dropdown(['None', ''], ["Catcher's Cola", 'catch'], ["Catcher's Cola ULTRA", 'catch_big'], ["Catcher's Cola DELUXE", 'catch_deluxe']);
-	let sim_args = {};
+	/** @type {SimulatorParams} */
+	let sim_args;
 	function update_sim_args() {
 		sim_args = {
 			casted_bait: f_bait.value,
@@ -441,6 +546,10 @@ const simulator_el = (() => {
 		let total_income_fishsale = 0;
 		let total_income_moneybags = 0;
 		let total_income_bonus = 0;
+		let total_income_bonus_catchersluck = 0;
+		let total_income_bonus_catchersluckultra = 0;
+		let total_income_bonus_luckylure = 0;
+		let total_xp = 0;
 
 		let unfreeze_blockingstart = now_ms();
 		// `step`s are number of successful samples (of `steps` total samples), `unfreeze_iterations` is number of goes thru the loop (success or not)
@@ -455,12 +564,15 @@ const simulator_el = (() => {
 					unfreeze_blockingstart = now_ms();
 				}
 			}
-			// {"elapsed":9.454701500825825,"bait_used":1,"inv_items_added":[{"id":"fish_ocean_sunfish","size":231.92000000000002,"quality":0,"tags":[]}],"gold_added":0}
 			const sim = wf.simulate_fishing(sim_args);
 			if(sim === null) { step--; continue; }
 			total_elapsed += sim.elapsed;
 			total_bait += sim.bait_used;
-			total_income_bonus += sim.gold_added;
+			total_income_bonus += sim.gold_added_total;
+			total_income_bonus_catchersluck += sim.gold_added_breakdown.catchers_luck;
+			total_income_bonus_catchersluckultra += sim.gold_added_breakdown.catchers_luck_ultra;
+			total_income_bonus_luckylure += sim.gold_added_breakdown.lucky_lure;
+			total_xp += sim.xp_gained;
 			for(const item of sim.inv_items_added) {
 				(freqs[item.id] ??= {})[item.quality] ??= 0;
 				freqs[item.id][item.quality]++;
@@ -484,19 +596,22 @@ const simulator_el = (() => {
 		}
 		let total_goldspent = total_goldspent_bait + total_goldspent_soda;
 		let total_income = total_income_fishsale + total_income_moneybags + total_income_bonus;
-		function fmt_pertime_hr(per_second) { return `${(per_second*60*60).toFixed(2)}/hr`; };
-		function fmt_pertime_min(per_second) { return `${(per_second * 60).toFixed(2)}/min (${fmt_pertime_hr(per_second)})`; }
+		function fmt_pertime_hr(/** @type {number} */ per_second) { return `${(per_second*60*60).toFixed(2)}/hr`; };
+		function fmt_pertime_min(/** @type {number} */ per_second) { return `${(per_second * 60).toFixed(2)}/min (${fmt_pertime_hr(per_second)})`; }
 		report_lines.push(`avg. fish: ${fmt_pertime_min(fish_per_second)}`);
+		report_lines.push(`xp: ${fmt_pertime_min(total_xp / total_elapsed)}`);
 		report_lines.push(`profit: ${fmt_pertime_min((total_income - total_goldspent) / total_elapsed)}`);
 		if(total_income_fishsale  != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_fishsale / total_elapsed)} selling catches`); }
 		if(total_income_moneybags != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_moneybags / total_elapsed)} from luck coin bags`); }
-		if(total_income_bonus     != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} bonus`); }
+		// if(total_income_bonus     != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} bonus`); }
+		if(total_income_bonus_catchersluck != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus_catchersluck / total_elapsed)} from catcher's luck`); }
+		if(total_income_bonus_catchersluckultra != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus_catchersluckultra / total_elapsed)} from catcher's luck ultra`); }
+		if(total_income_bonus_luckylure != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} from lucky lure`); }
 		if(total_goldspent_bait   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_bait / total_elapsed)} buying bait`); }
 		if(total_goldspent_soda   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_soda / total_elapsed)} buying soda`); }
 		if(sim_args.lure_selected === 'challenge_lure') { warning_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
 		warning_lines.push('WARNING: elapsed times are currently a slight under-estimate');
 		if(sim_args.rod_speed_level !== 0) { warning_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
-		if(sim_args.soda !== null) { warning_lines.push('WARNING: soda benefits not yet considered in simulation'); }
 		// clear old report
 		report_container.replaceChildren();
 		elhelper.create('pre', { parent: report_container, textContent: report_lines.join('\n') });
@@ -575,6 +690,12 @@ elhelper.create('div', {
 		mk_section('fishing calculator', simulator_el, true),
 		mk_section('items', mktable(Object.entries(wf_data.item_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'item_name', 'category', 'tier', 'rare', 'catch_difficulty', 'catch_speed', 'loot_table', 'average_size', 'sell_value', 'sell_multiplier'])),
 		mk_section('cosmetics', mktable(Object.entries(wf_data.cosmetic_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'name', 'in_rotation', 'chest_reward', 'cost', 'title'])),
+		mk_section('Changelog', elhelper.create('pre', { textContent: `\
+2024/11/01
+ - initial release
+2024/11/02
+ - added catcher's cola effects to simulator
+ - added xp gain to simulator` })),
 	],
 });
 
