@@ -695,7 +695,9 @@ elhelper.create('div', {
  - initial release
 2024/11/02
  - added catcher's cola effects to simulator
- - added xp gain to simulator` })),
+ - added xp gain to simulator
+2024/11/06
+ - updated data dump to v1.09 info` })),
 	],
 });
 
