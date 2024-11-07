@@ -610,6 +610,7 @@ const simulator_el = (() => {
 		if(total_goldspent_bait   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_bait / total_elapsed)} buying bait`); }
 		if(total_goldspent_soda   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_soda / total_elapsed)} buying soda`); }
 		if(sim_args.lure_selected === 'challenge_lure') { warning_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
+		warning_lines.push('WARNING: not updated for v1.09 yet, coming soon!');
 		warning_lines.push('WARNING: elapsed times are currently a slight under-estimate');
 		if(sim_args.rod_speed_level !== 0) { warning_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
 		// clear old report
