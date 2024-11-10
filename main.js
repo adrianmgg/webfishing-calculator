@@ -45,6 +45,7 @@ const elhelper = (function() { /* via https://github.com/adrianmgg/elhelper, MIT
 /** @typedef {keyof WFDataDump['PlayerData']['LURE_DATA']} LureId */
 /** @typedef {keyof WFDataDump['item_data']} ItemId */
 /** @typedef {{[K in keyof WFDataDump['item_data'][ItemId]['file']]: WFDataDump['item_data'][ItemId]['file'][K]}} ItemInfo */
+/** @typedef {""|"small"|"lucky"|"patient"|"quick"|"salty"|"fresh"|"efficient"|"magnet"|"large"|"attractive"|"sparkling"|"double"|"gold"|"challenge"|"rain"} LureEffectId */
 
 /**
  * @typedef {object} ItemInstance
@@ -55,6 +56,7 @@ const elhelper = (function() { /* via https://github.com/adrianmgg/elhelper, MIT
 
 /** @type {WFDataDump} */
 const wf_data = await fetch('webfishing_data_dump.json').then(r => r.json());
+window.wf_data = wf_data;
 const godot = {}; // godot api function reimpls
 godot.rand_range = function(min, max) { return Math.random() * (max - min) + min; };
 godot.randf = function() { return Math.random(); };
@@ -141,12 +143,87 @@ wf._get_item_worth = function(item, type = "money") {
 	if(type == "credits" && item["fresh"] == false) { worth = 0; }
 	return worth;
 };
+
+/**
+ * @typedef {object} ZoneInfo
+ * see /Scenes/Entities/Player/fish_zone.gd for interface
+ * @property {number} chance_boost
+ * @property {LootTableId | ''} fish_type
+ * @property {number} junk_mult
+ * @property {LootTableId | ''} alt_type
+ * @property {number} alt_chance
+ * @property {number} quality_boost
+ * @property {boolean} type_lock
+ */
+const ZONES = {};
+/**
+ * values from /Scenes/Entities/Player/fish_zone.gd
+ * @type {ZoneInfo}
+ */
+ZONES.DEFAULTS = {
+	chance_boost: 0.0,
+	fish_type: 'lake',
+	junk_mult: 1.0,
+	alt_type: '',
+	alt_chance: 0.0,
+	quality_boost: 1.0,
+	type_lock: false,
+};
+/**
+ * via /Scenes/Entities/FishSpawn/fish_spawn.tscn
+ * @type {ZoneInfo}
+ */
+ZONES.RIPPLE = {
+	...ZONES.DEFAULTS,
+	chance_boost: 25.0,
+	fish_type: '',
+	quality_boost: 1.5,
+};
+/**
+ * via /Scenes/Entities/MeteorSpawn/meteor_spawn.tscn
+ * @type {ZoneInfo}
+ */
+ZONES.METEOR = {
+	...ZONES.DEFAULTS,
+	chance_boost: 5.0,
+	fish_type: 'alien',
+	junk_mult: 0.0,
+	type_lock: true,
+};
+/** via /Scenes/Entities/Props/prop_toilet.tscn */
+ZONES.PROP_TOILET = ZONES.DEFAULTS;
+/** via /Scenes/Entities/Props/prop_well.tscn */
+ZONES.PROP_WELL = ZONES.DEFAULTS;
+/** via /Scenes/Map/Zones/BoatZones/boat_yacht_zone.tscn */
+ZONES.ZONE_YACHT = ZONES.DEFAULTS;
+/** via /Scenes/Map/Zones/IslandZones/island_big_zone.tscn */
+ZONES.ZONE_ISLAND_BIG = ZONES.DEFAULTS;
+/** via /Scenes/Map/Zones/IslandZones/island_med_zone.tscn */
+ZONES.ZONE_ISLAND_MED = ZONES.DEFAULTS;
+/** via /Scenes/Map/Zones/main_zone.tscn */
+ZONES.ZONE_MAIN = ZONES.DEFAULTS;
+/**
+ * via /Scenes/Map/Zones/tutorial_zone.tscn
+ * @type {ZoneInfo}
+ */
+ZONES.ZONE_TUTORIAL = {
+	...ZONES.DEFAULTS,
+	chance_boost: 2.5,
+};
+/**
+ * via /Scenes/Map/Zones/void_zone.tscn
+ * @type {ZoneInfo}
+ */
+ZONES.ZONE_VOID = {
+	...ZONES.DEFAULTS,
+	alt_type: 'void',
+	alt_chance: 0.025,
+};
+// TODO there's also `/Scenes/Entities/FishSpawn/fish_spawn_deep.tscn`, pretty sure that's not used anywhere but should double check
+
 /**
  * @typedef {object} SimulatorParams
  * @property {BaitType} casted_bait
- * @property {number} zone_chance_boost
- * @property {number} junk_mult
- * @property {LootTableId} fish_type
  * @property {boolean} in_rain
  * @property {LureId} lure_selected
  * @property {0|1|2|3|4|5} rod_luck_level
@@ -154,6 +231,7 @@ wf._get_item_worth = function(item, type = "money") {
  * @property {0|1|2|3|4|5} rod_speed_level
  * @property {0|1|2|3|4|5} rod_chance_level
  * @property {null|'catch'|'catch_big'|'catch_deluxe'} soda
+ * @property {ZoneInfo[]} zones list of zones effecting this catch
  */
 /**
  * @typedef {object} SimulatorResult
@@ -170,9 +248,6 @@ wf._get_item_worth = function(item, type = "money") {
  */
 wf.simulate_fishing = function({
 	casted_bait,
-	zone_chance_boost = 0.0,
-	junk_mult = 1.0, // comes from the zone
-	fish_type = 'ocean', // comes from the zone
 	in_rain = false, // raining?
 	lure_selected = '',
 	rod_luck_level = 0, // variable on PlayerData, stored in save as rod_luck
@@ -180,6 +255,7 @@ wf.simulate_fishing = function({
 	rod_speed_level = 0,
 	rod_chance_level = 0,
 	soda = null, // catch | catch_big | catch_deluxe | null
+	zones,
 }) {
 	let failed_casts = 0.0;  // fishing logic variable
 	let elapsed = 0.0;  // our tracking for seconds elapsed
@@ -189,14 +265,14 @@ wf.simulate_fishing = function({
 	let gold_added_breakdown = { catchers_luck: 0, catchers_luck_ultra: 0, lucky_lure: 0 };
 	let xp_gained = 0;
 
-	// catch drink defaults, via _process_timers
+	// catch drink defaults, via /Scenes/entities/Player/player.gd::_process_timers
 	let catch_drink_boost = 1.0;
 	let catch_drink_reel = 1.0;
 	let catch_drink_xp = 1.0;
 	let catch_drink_gold_add = [0, 0];
 	let catch_drink_gold_percent = 0.0;
 
-	// effects of drinking each soda, via _consume_item
+	// effects of drinking each soda, via /Scenes/entities/Player/player.gd::_consume_item
 	switch (soda) {
 		case "catch":
 			// catch_drink_timer = 18000;
@@ -227,11 +303,11 @@ wf.simulate_fishing = function({
 			break;
 	}
 
-	// =============================
-	// ==== _cast_fishing_rod() ====
-	// =============================
+	// ================================================================
+	// ==== /Scenes/entities/Player/player.gd::_cast_fishing_rod() ====
+	// ================================================================
 
-	let rod_cast_data = wf_data.PlayerData.LURE_DATA[lure_selected].effect_id;
+	let rod_cast_data = /** @type {LureEffectId} */ (wf_data.PlayerData.LURE_DATA[lure_selected].effect_id);
 	// ... animation stuff ...
 	// ... out of bait warning stuff ...
 	
@@ -250,9 +326,29 @@ wf.simulate_fishing = function({
 	// ... animation stuff ...
 	// ^ TODO for elapsed time calc, should factor in this duration too
 	
-	// ========================================
-	// ==== _on_fish_catch_timer_timeout() ====
-	// ========================================
+	// ===========================================================================
+	// ==== /Scenes/entities/Player/player.gd::_on_fish_catch_timer_timeout() ====
+	// ===========================================================================
+
+	// zone-related stuff is computed
+	/** @type {LootTableId} */
+	let fish_type = 'ocean';
+	let type_lock = false;
+	let junk_mult = 1.0;
+	const fish_zone_data = {boost: 0.0, quality_boost: 1.0};
+	// TODO how are these ordered? that could impact results
+	for(const zone of zones) { // for zone in fishing_area.get_overlapping_areas():
+		// if zone.is_in_group("fish_zone"): // (irrelevant for now, we don't track any other zones)
+		// fish_zone_data["id"] = zone.id // (irrelevant, we don't care about the zone id)
+		fish_zone_data.boost = zone.chance_boost;
+		fish_zone_data.quality_boost = zone.quality_boost;
+		junk_mult = zone.junk_mult;
+		if(zone.fish_type !== '') { fish_type = zone.fish_type; }
+		if(zone.alt_chance > 0.0 && godot.randf() < zone.alt_chance) {
+			fish_type = zone.alt_type;
+		}
+		type_lock = zone.type_lock;
+	}
 
 	// timer loop
 	timer_loop: for(;;) {
@@ -262,7 +358,7 @@ wf.simulate_fishing = function({
 		fish_chance = base_chance;
 		fish_chance += (base_chance * failed_casts);
 		fish_chance += (base_chance * rod_chance);
-		fish_chance += zone_chance_boost * fish_chance;
+		fish_chance += fish_zone_data.boost * fish_chance;
 		// TODO: if(recent_reel > 0) {fish_chance *= 1.1; }
 		if(rod_cast_data == "attractive") { fish_chance *= 1.3; }
 		if(in_rain) { fish_chance *= 1.1; }
@@ -286,19 +382,22 @@ wf.simulate_fishing = function({
 	if(rod_cast_data == "gold") { bait_used += 2; }
 
 	let treasure_mult = 1.0;
-	if(rod_cast_data == "magnet") { treasure_mult = 2.0; }
-	if(rod_cast_data == "salty") { fish_type = "ocean"; }
-	if(rod_cast_data == "fresh") { fish_type = "lake"; }
+	if(rod_cast_data == "magnet") {
+		treasure_mult = 2.0;
+		junk_mult = 3.0;
+	}
+	if(rod_cast_data == "salty" && !type_lock) { fish_type = "ocean"; }
+	if(rod_cast_data == "fresh" && !type_lock) { fish_type = "lake"; }
 	
 	let force_av_size = false;
 	
-	if(godot.randf() < 0.05 * treasure_mult * junk_mult) {
+	if(godot.randf() < 0.05 * junk_mult && !type_lock) {
 		fish_type = "water_trash";
 		max_tier = 0;
 		force_av_size = true;
 	}
 	
-	if(in_rain && (godot.randf() < 0.08)) { fish_type = "rain"; }
+	if(in_rain && (godot.randf() < 0.08) && !type_lock) { fish_type = "rain"; }
 	
 	let rolls = [];
 	for(let i = 0; i < 3; i++) {
@@ -345,12 +444,12 @@ wf.simulate_fishing = function({
 		if(wf_data.BAIT_DATA[casted_bait]["quality"].length - 1 < q) {
 			break; // bait does not support rarity
 		}
-		if(godot.randf() < wf_data.BAIT_DATA[casted_bait]["quality"][q]) {
+		if(godot.randf() < (wf_data.BAIT_DATA[casted_bait]["quality"][q] * fish_zone_data.quality_boost)) {
 			quality = q;
 		}
 	}
 	
-	if(godot.randf() < 0.02 * treasure_mult) {
+	if(godot.randf() < 0.02 * treasure_mult && !type_lock) {
 		fish_roll = "treasure_chest";
 		size = 60.0;
 		quality = 0;
@@ -393,6 +492,9 @@ wf.simulate_fishing = function({
 		// PlayerData._send_notification("Your Lucky Lure got you $" + str(gold) + "!")
 		gold_added_total += gold;
 		gold_added_breakdown.lucky_lure += gold;
+	}
+	if(rod_cast_data === 'rain' && godot.randf() < 0.06) {
+		// TODO: if no existing raincloud_tiny owned by player, summon a raincloud_tiny at player's pos
 	}
 	if(catch_drink_gold_add != [0, 0]) {
 		const gold = Math.max(1, Math.ceil(godot.rand_range(catch_drink_gold_add[0], catch_drink_gold_add[1])));
@@ -440,6 +542,9 @@ function mk_spoiler_collapse(title, el) {
 function mk_section(title, el, open=false) {
 	return elhelper.setup(mk_spoiler_collapse(title, el), { classList: ['wf-uielem'], open });
 }
+/**
+ * @param {(string | [string, string | number])[]} choices
+ */
 function mk_form_dropdown(...choices) {
 	return elhelper.create('select', {
 		children: choices.map((choice) => {
@@ -458,9 +563,6 @@ function mk_form_fieldset(label, children) {
             ...children,
         ],
     });
-}
-function async_sleep(ms) {
-	return new Promise((resolve) => { setTimeout(() => resolve(), ms); });
 }
 const now_ms = performance?.now !== undefined ? () => performance.now() : () => Date.now();
 
@@ -514,10 +616,29 @@ const simulator_el = (() => {
 	const f_rodchance = mk_form_dropdown(...[0, 1, 2, 3, 4, 5].map((n,idx) => [n,idx]));
 	const f_rodluck = mk_form_dropdown(...[0, 1, 2, 3, 4, 5].map((n,idx) => [n,idx]));
 	const f_maxbait = mk_form_dropdown(...[5, 10, 15, 20, 25, 30].map((n,idx) => [n,idx]));
-	const f_fishtype = mk_form_dropdown('ocean', 'lake');
 	const f_raining = elhelper.create('input', { type: 'checkbox', checked: false });
 	const f_simsteps = elhelper.create('input', { type: 'number', min: 1, valueAsNumber: 10_000 });
 	const f_drink = mk_form_dropdown(['None', ''], ["Catcher's Cola", 'catch'], ["Catcher's Cola ULTRA", 'catch_big'], ["Catcher's Cola DELUXE", 'catch_deluxe']);
+	const zone_list_consts = {
+		// TODO mod in some log statements and see what the actual zone lists look like
+		ocean: [],
+		freshwater: [ZONES.ZONE_MAIN],
+		void: [ZONES.ZONE_VOID],
+		// props: [ZONES.PROP_TOILET],
+		tutorial: [ZONES.ZONE_TUTORIAL],
+		meteor: [ZONES.METEOR],
+		ocean_ripple: [ZONES.RIPPLE],
+		freshwater_ripple: [ZONES.ZONE_MAIN, ZONES.RIPPLE],
+	};
+	const f_zone = mk_form_dropdown(
+		['Ocean', 'ocean'],
+		['Freshwater', 'freshwater'],
+		['Void', 'void'],
+		['Tutorial Area', 'tutorial'],
+		['Meteor', 'meteor'],
+		['Ocean + Ripple', 'ocean_ripple'],
+		['Freshwater + Ripple', 'freshwater_ripple'],
+	);
 	/** @type {SimulatorParams} */
 	let sim_args;
 	function update_sim_args() {
@@ -527,10 +648,10 @@ const simulator_el = (() => {
 			rod_speed_level: Number.parseInt(f_rodspeed.value),
 			rod_chance_level: Number.parseInt(f_rodchance.value),
 			rod_luck_level: Number.parseInt(f_rodluck.value),
-			fish_type: f_fishtype.value,
 			in_rain: f_raining.checked,
 			lure_selected: f_lure.value,
 			soda: f_drink.value === '' ? null : f_drink.value,
+			zones: zone_list_consts[f_zone.value],
 		};
 	}
 	const task_mgr = new SingleChunkedTaskRunnner(25);
@@ -538,6 +659,7 @@ const simulator_el = (() => {
 		yield;
 		container.classList.add('loading');
 		// run simulation, capture stats
+		const sim_starttime = now_ms();
 		const player_max_bait = [5, 10, 15, 20, 25, 30][f_maxbait.value];
 		const steps = f_simsteps.valueAsNumber;
 		let total_elapsed = 0;
@@ -582,6 +704,7 @@ const simulator_el = (() => {
 				else { total_income_fishsale += item_worth; }
 			}
 		}
+		const sim_endtime = now_ms();
 		// generate report
 		const report_lines = [];
 		const warning_lines = [];
@@ -598,6 +721,7 @@ const simulator_el = (() => {
 		let total_income = total_income_fishsale + total_income_moneybags + total_income_bonus;
 		function fmt_pertime_hr(/** @type {number} */ per_second) { return `${(per_second*60*60).toFixed(2)}/hr`; };
 		function fmt_pertime_min(/** @type {number} */ per_second) { return `${(per_second * 60).toFixed(2)}/min (${fmt_pertime_hr(per_second)})`; }
+		report_lines.push(`simulated ${steps} catches in ${((sim_endtime - sim_starttime) / 1000).toFixed(3)} seconds`);
 		report_lines.push(`avg. fish: ${fmt_pertime_min(fish_per_second)}`);
 		report_lines.push(`xp: ${fmt_pertime_min(total_xp / total_elapsed)}`);
 		report_lines.push(`profit: ${fmt_pertime_min((total_income - total_goldspent) / total_elapsed)}`);
@@ -609,10 +733,11 @@ const simulator_el = (() => {
 		if(total_income_bonus_luckylure != 0) { report_lines.push(`    + ${fmt_pertime_min(total_income_bonus / total_elapsed)} from lucky lure`); }
 		if(total_goldspent_bait   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_bait / total_elapsed)} buying bait`); }
 		if(total_goldspent_soda   != 0) { report_lines.push(`    - ${fmt_pertime_min(total_goldspent_soda / total_elapsed)} buying soda`); }
-		if(sim_args.lure_selected === 'challenge_lure') { warning_lines.push('WARNING: challenge lure profits not yet included in simulation'); };
-		warning_lines.push('WARNING: not updated for v1.09 yet, coming soon!');
-		warning_lines.push('WARNING: elapsed times are currently a slight under-estimate');
-		if(sim_args.rod_speed_level !== 0) { warning_lines.push('WARNING: time savings from higher rod reel speeds not yet considered in simulation'); }
+		// warnings
+		if(sim_args.lure_selected === 'challenge_lure') { warning_lines.push("WARNING: challenge lure's profits aren't included in the simulation yet"); };
+		if(sim_args.rod_speed_level !== 0) { warning_lines.push("WARNING: time savings from higher rod reel speeds aren't included in the simulation yet"); }
+		if(sim_args.lure_selected === 'rain_lure') { warning_lines.push("WARNING: shower lure's effects aren't included in the simulation yet"); }
+		warning_lines.push("WARNING: elapsed times are currently a slight under-estimate (casting animation & catching minigame aren't counted)");
 		// clear old report
 		report_container.replaceChildren();
 		elhelper.create('pre', { parent: report_container, textContent: report_lines.join('\n') });
@@ -655,7 +780,7 @@ const simulator_el = (() => {
                 mk_labeled('Max Bait', f_maxbait),
             ]),
             mk_form_fieldset('Environment', [
-                mk_labeled('Zone Type', f_fishtype),
+                mk_labeled('Zone', f_zone),
                 mk_labeled('Raining?', f_raining),
             ]),
 			mk_form_fieldset('Misc.', [
@@ -689,8 +814,6 @@ elhelper.create('div', {
 	classList: ['detail-container'],
 	children: [
 		mk_section('fishing calculator', simulator_el, true),
-		mk_section('items', mktable(Object.entries(wf_data.item_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'item_name', 'category', 'tier', 'rare', 'catch_difficulty', 'catch_speed', 'loot_table', 'average_size', 'sell_value', 'sell_multiplier'])),
-		mk_section('cosmetics', mktable(Object.entries(wf_data.cosmetic_data).map(([k,v]) => ({id: k, ...v.file})), ['id', 'name', 'in_rotation', 'chest_reward', 'cost', 'title'])),
 		mk_section('Changelog', elhelper.create('pre', { textContent: `\
 2024/11/01
  - initial release
@@ -698,7 +821,19 @@ elhelper.create('div', {
  - added catcher's cola effects to simulator
  - added xp gain to simulator
 2024/11/06
- - updated data dump to v1.09 info` })),
+ - updated data dump to v1.09 info
+2024/11/09
+ - fully updated calculator to v1.09
+ - data dump tables now show all fields`
+}), true),
+		mk_section('items', mktable(
+			Object.entries(wf_data.item_data).map(([k,v]) => ({id: k, ...v.file})),
+			Array.from(new Set(Object.values(wf_data.item_data).flatMap(v => Object.keys(v.file)))))
+		),
+		mk_section('cosmetics', mktable(
+			Object.entries(wf_data.cosmetic_data).map(([k,v]) => ({id: k, ...v.file})),
+			Array.from(new Set(Object.values(wf_data.cosmetic_data).flatMap(v => Object.keys(v.file)))))
+		),
 	],
 });
 
